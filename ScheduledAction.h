@@ -3,6 +3,7 @@
 #include <Arduino.h>
 #include <functional>
 #include "TimeProviderBase.h"
+#include <vector>
 
 // assume you have defined and initialized this somewhere in your sketch:
 extern TimeProviderBase* gTimeProvider;
@@ -66,4 +67,27 @@ private:
 
     int   _lastSec   = 0;    // used to spot the midnight wraparound
     bool  _triggered = false;
+};
+
+//just a vector of ScheduledAction objects with one loop() method
+class ScheduledActions {
+    public:
+    void add(ScheduledAction&& action) {
+        _actions.push_back(std::move(action));
+    }
+
+    void loop() {
+        for (auto& action : _actions) {
+            action.loop();
+        }
+    }
+
+    void reset() {
+        for (auto& action : _actions) {
+            action.reset();
+        }
+    }
+    
+    private:
+    std::vector<ScheduledAction> _actions;  // store ScheduledAction objects
 };
