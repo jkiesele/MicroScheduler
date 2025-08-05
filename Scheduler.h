@@ -194,14 +194,18 @@ public:
                       uint32_t interval = 0);
 
     // 2) "Conditional" => must become true within conditionWait
-    //    postConditionDelay = 0 => run immediately after condition
+    //    In sequential mode, conditionWaitMs is w.r.t. 
+    //    the last task finish time, not the current time.
     //    If conditionWait <= 0 => indefinite
     PID_t addConditionalTask(std::function<void()> action,
                             std::function<bool()> condition,
                             uint32_t conditionWaitMs = 0);
 
     // 3) "Conditional + Post Delay"
-    //    Must become true within conditionWait; then wait postConditionDelay
+    //    Must become true within conditionWaitMs; 
+    //    In sequential mode, conditionWaitMs is w.r.t. 
+    //    the last task finish time, not the current time.
+    //    then wait postConditionDelay
     //    If conditionWait <= 0 => indefinite
     PID_t addConditionalTimedTask(std::function<void()> action,
                                  std::function<bool()> condition,
