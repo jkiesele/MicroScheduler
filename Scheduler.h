@@ -30,6 +30,15 @@ public:
     ~ScopedFlag() { flag = false; }
 };
 
+class MuxGuard {
+public:
+    explicit MuxGuard(portMUX_TYPE* m, bool no_lock=false) : locked(!no_lock), mux(m) { if (!no_lock) taskENTER_CRITICAL(mux); }
+    ~MuxGuard() { if (locked) taskEXIT_CRITICAL(mux); }
+private:
+    bool locked = true; // to avoid double exit
+    portMUX_TYPE* mux;
+};
+
 class Scheduler {
 private:
     struct Task {
@@ -85,9 +94,12 @@ private:
     std::vector<PID_t> tasksToRemove;
 
      // can be private now with changes to stop
-    void clear() { tasks.clear(); }
+    void clear() { 
+        MuxGuard lock(&schedMux); 
+        tasks.clear(); 
+    }
 
-    void clearMarkedForRemoval();
+    void clearMarkedForRemoval(bool locked=true);
 
     PID_t nextPID = 1;
     PID_t getAndIncrementPID();
@@ -95,11 +107,63 @@ private:
     bool onHold = false;
     bool inLoop = false;
 
+    mutable portMUX_TYPE schedMux = portMUX_INITIALIZER_UNLOCKED;
+
+    
+    
+    std::function<void()> getTaskActionByPID(PID_t pid) {
+        //
+        MuxGuard lock(&schedMux);
+        auto it = std::find_if(tasks.begin(), tasks.end(),
+                               [pid](const Task& tk){ return tk.PID == pid; });
+        if (it != tasks.end()) {
+            return it->action;
+        }
+        return std::function<void()>{}; // not found
+    }
+
+    Task copyTaskByPID(PID_t pid, bool& success, bool locked = true) {
+        Task t;
+        success = false;
+        MuxGuard lock(&schedMux, !locked);
+        auto it = std::find_if(tasks.begin(), tasks.end(),
+                               [pid](const Task& tk){ return tk.PID == pid; });
+        if (it != tasks.end()) {
+            t = *it; // copy the task
+            success = true;
+        }
+        return t; // will be empty if not found
+    }
+
+    bool modifyTaskByPID(PID_t pid, const Task& newTask, bool locked = true) {
+        MuxGuard lock(&schedMux, !locked);
+        auto it = std::find_if(tasks.begin(), tasks.end(),
+                               [pid](const Task& tk){ return tk.PID == pid; });
+        if (it != tasks.end()) {
+            *it = newTask; // modify the task
+            return true;
+        }
+        return false; // not found
+    }
+
+    //never locked! Caller must own schedMux; pointer valid only until lock released.
+    Task * getTaskByPID(PID_t pid) {
+        auto it = std::find_if(tasks.begin(), tasks.end(),
+                               [pid](const Task& tk){ return tk.PID == pid; });
+        if (it != tasks.end()) {
+            return &(*it); // return pointer to the task
+        }
+        return nullptr; // not found
+    }
+
 public:
     // Constructor
     Scheduler();
 
-    size_t taskCount() const { return tasks.size(); }
+    size_t taskCount() const { 
+        MuxGuard lock(&schedMux);
+        return tasks.size();
+    }
 
     // Switch modes
     void setAndStartSequentialMode(bool seq);
