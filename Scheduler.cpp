@@ -9,8 +9,8 @@ Scheduler::Scheduler() {
     tasksToRemove.reserve(8);
 }
 
-void Scheduler::clearMarkedForRemoval(bool locked) {
-    MuxGuard lock(&schedMux, !locked);
+void Scheduler::clearMarkedForRemoval(bool alreadyLocked) {
+    MuxGuard lock(&schedMux, !alreadyLocked);
     for(auto pid : tasksToRemove){
         //find task with pid
         auto it = std::find_if(tasks.begin(), tasks.end(), [pid](const Task &t) { return t.PID == pid; });

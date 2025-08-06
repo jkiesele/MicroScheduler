@@ -41,6 +41,8 @@ private:
 
 class Scheduler {
 private:
+
+    
     struct Task {
 
         PID_t PID = 0;
@@ -99,7 +101,7 @@ private:
         tasks.clear(); 
     }
 
-    void clearMarkedForRemoval(bool locked=true);
+    void clearMarkedForRemoval(bool alreadyLocked=true);
 
     PID_t nextPID = 1;
     PID_t getAndIncrementPID();
@@ -197,6 +199,7 @@ public:
     //    In sequential mode, conditionWaitMs is w.r.t. 
     //    the last task finish time, not the current time.
     //    If conditionWait <= 0 => indefinite
+    //    Conditions must not call back into Scheduler!
     PID_t addConditionalTask(std::function<void()> action,
                             std::function<bool()> condition,
                             uint32_t conditionWaitMs = 0);
@@ -207,6 +210,7 @@ public:
     //    the last task finish time, not the current time.
     //    then wait postConditionDelay
     //    If conditionWait <= 0 => indefinite
+    //    Conditions must not call back into Scheduler!
     PID_t addConditionalTimedTask(std::function<void()> action,
                                  std::function<bool()> condition,
                                  uint32_t postDelayMs,
