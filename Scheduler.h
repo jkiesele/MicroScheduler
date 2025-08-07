@@ -190,6 +190,7 @@ public:
     // 1) "Purely Timed" => condition always true, no conditionWait needed
     //    user gives "delayMs" => that is your postConditionDelay
     //    If repeat is true, interval is how often it repeats (in parallel).
+    //    Also, if repeat is true and no interval is given, it defaults to delayMs.
     PID_t addTimedTask(std::function<void()> action,
                       uint32_t delayMs,
                       bool repeat = false,

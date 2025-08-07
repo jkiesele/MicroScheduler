@@ -77,6 +77,9 @@ PID_t Scheduler::addTimedTask(std::function<void()> action,
         gLogger->println("Too many tasks, only 124 allowed not adding more");
         return 0;
     }
+    if(repeat && interval == 0) {
+        interval = delayMs; // default to delayMs if no interval is given
+    }
 
     Task t;
     t.action = action;
