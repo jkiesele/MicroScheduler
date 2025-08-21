@@ -64,7 +64,7 @@ void Scheduler::setAndStartSequentialMode(bool seq) {
        with an immediately true condition, so conditionWait= 0, condition= always true.
      - If repeat in sequential => not allowed => forcibly set repeat = false.
 */
-PID_t Scheduler::addTimedTask(std::function<void()> action,
+PID_t Scheduler::addTimedTask(std::function<void()> onExecute,
                              uint32_t delayMs,
                              bool repeat,
                              uint32_t interval)
@@ -82,7 +82,7 @@ PID_t Scheduler::addTimedTask(std::function<void()> action,
     }
 
     Task t;
-    t.action = action;
+    t.onExecute = onExecute;
     t.repeat = repeat;
     t.interval = interval;
 
@@ -109,16 +109,18 @@ PID_t Scheduler::addTimedTask(std::function<void()> action,
 }
 
 // 2) addConditionalTask => postConditionDelay=0 => run immediately after condition
-PID_t Scheduler::addConditionalTask(std::function<void()> action,
+PID_t Scheduler::addConditionalTask(std::function<void()> onExecute,
                                    std::function<bool()> condition,
-                                   uint32_t conditionWaitMs)
+                                   uint32_t conditionWaitMs,
+                                   std::function<void(PID_t)> onTimeout)
 {
     if (taskCount() >= MAX_TASKS){
         gLogger->println("Too many tasks, only 124 allowed not adding more");
         return 0;
     }
     Task t;
-    t.action = action;
+    t.onExecute = onExecute;
+    t.onTimeout = onTimeout;
     t.repeat = false;
     t.interval = 0;
     t.condition = condition;
@@ -137,17 +139,19 @@ PID_t Scheduler::addConditionalTask(std::function<void()> action,
 }
 
 // 3) addConditionalTimedTask => postConditionDelay>0 => run that long after condition is true
-PID_t Scheduler::addConditionalTimedTask(std::function<void()> action,
+PID_t Scheduler::addConditionalTimedTask(std::function<void()> onExecute,
                                         std::function<bool()> condition,
                                         uint32_t postDelayMs,
-                                        uint32_t conditionWaitMs)
+                                        uint32_t conditionWaitMs,
+                                        std::function<void(PID_t)> onTimeout)
 {
     if (taskCount() >= MAX_TASKS){
         gLogger->println("Too many tasks, only 124 allowed not adding more");
         return 0;
     }
     Task t;
-    t.action = action;
+    t.onExecute = onExecute;
+    t.onTimeout = onTimeout;
     t.repeat = false;
     t.interval = 0;
     t.condition = condition;
@@ -211,7 +215,7 @@ uint32_t Scheduler::timeToNextTask() const{
         if (t.executeAt == 0) {
             return 0; // at least one Task needs to be initialised immediately
         }
-        long timeLeft = t.executeAt - now;
+        long timeLeft = (long)(t.executeAt - now);
         if (timeLeft < 0) {
             // Task is ready to run
             return 0;
@@ -273,7 +277,9 @@ void Scheduler::loop() {
 
         std::vector<PID_t> execPIDs;
         std::vector<PID_t> removePIDs;
+        std::vector<PID_t> timeoutPIDs; 
         execPIDs.reserve(8); removePIDs.reserve(8);
+        timeoutPIDs.reserve(4);
 
         {
             MuxGuard lock(&schedMux);
@@ -332,8 +338,9 @@ void Scheduler::loop() {
                         // condition still false => check if we timed out
                         if (!t.indefinite()) {
                             if ((long)(now - t.executeAt) >= 0) {
-                                // timed out => remove
+                                // timed out => schedule removal and timeout callback (PID-only, like execPIDs)
                                 removePIDs.push_back(t.PID);
+                                timeoutPIDs.push_back(t.PID);
                             }
                         }
                     }
@@ -361,7 +368,7 @@ void Scheduler::loop() {
             
             MuxGuard lock(&schedMux); // lock access to tasksToRemove and tasks
             if(will_stop){
-                //now, we might have added to the task list within action.
+                //now, we might have added to the task list within onExecute.
                 //we want to keep those new tasks, but mark all others for removal
                 //and don't execute them
                 execPIDs.clear();
@@ -397,7 +404,16 @@ void Scheduler::loop() {
                 removePIDs.push_back(t.PID);
             }
         }
-
+        //dedup timeout pids to avoid calling onTimeout multiple times for the same task
+        if (!timeoutPIDs.empty()) {
+            std::sort(timeoutPIDs.begin(), timeoutPIDs.end());
+            timeoutPIDs.erase(std::unique(timeoutPIDs.begin(), timeoutPIDs.end()), timeoutPIDs.end());
+        }
+        // Invoke timeout callbacks (outside lock), mirroring exec flow (get callback by PID, then call)
+        for (auto tpid : timeoutPIDs) {
+            auto cb = getTaskTimeoutByPID(tpid); // copies the std::function while holding the lock internally
+            if (cb) cb(tpid);
+        }
         //find all tasks that are marked for removal
     {
         std::sort(removePIDs.begin(), removePIDs.end());
@@ -473,6 +489,10 @@ void Scheduler::loop() {
         }
 
         if (removeThisTask) {
+            // fire timeout callback outside lock, before removal
+            if (t.onTimeout) {
+                t.onTimeout(t.PID);
+            }
             MuxGuard lock(&schedMux);
             //we need to find the task again by PID
             auto it = std::find_if(tasks.begin(), tasks.end(),
@@ -484,9 +504,9 @@ void Scheduler::loop() {
             return;
         }
         else if (executeThisTask) {
-            t.action();
+            t.onExecute();
             // also here we might have called stop from within a task, but might have also added new ones
-            // so we need to clear all tasks that existed before the action call, they can be found in tasksToRemove
+            // so we need to clear all tasks that existed before the onExecute call, they can be found in tasksToRemove
             
             MuxGuard lock(&schedMux);
             if(will_stop){ //doesn't happen that often.

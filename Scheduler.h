@@ -4,6 +4,7 @@
 #include <Arduino.h>
 #include <vector>
 #include <functional>
+#include <algorithm>
 
 /*
   A single unified Task struct:
@@ -47,7 +48,8 @@ private:
 
         PID_t PID = 0;
 
-        std::function<void()> action;
+        std::function<void()> onExecute;
+        std::function<void(PID_t)> onTimeout; // optional
         
         // If repeat == true, we are in parallel mode only
         bool repeat = false;
@@ -64,7 +66,7 @@ private:
         uint32_t postConditionDelay = 0;
 
         // The absolute time (millis) at which the condition times out
-        // or at which we run the action, depending on the stage.
+        // or at which we run the onExecute, depending on the stage.
         // We'll set this dynamically in the code.
         uint32_t executeAt = 0;
 
@@ -119,9 +121,19 @@ private:
         auto it = std::find_if(tasks.begin(), tasks.end(),
                                [pid](const Task& tk){ return tk.PID == pid; });
         if (it != tasks.end()) {
-            return it->action;
+            return it->onExecute;
         }
         return std::function<void()>{}; // not found
+    }
+
+    std::function<void(PID_t)> getTaskTimeoutByPID(PID_t pid) {
+        MuxGuard lock(&schedMux);
+        auto it = std::find_if(tasks.begin(), tasks.end(),
+                               [pid](const Task& tk){ return tk.PID == pid; });
+        if (it != tasks.end()) {
+            return it->onTimeout;
+        }
+        return std::function<void(PID_t)>{}; // not found
     }
 
     Task copyTaskByPID(PID_t pid, bool& success, bool locked = true) {
@@ -191,7 +203,7 @@ public:
     //    user gives "delayMs" => that is your postConditionDelay
     //    If repeat is true, interval is how often it repeats (in parallel).
     //    Also, if repeat is true and no interval is given, it defaults to delayMs.
-    PID_t addTimedTask(std::function<void()> action,
+    PID_t addTimedTask(std::function<void()> onExecute,
                       uint32_t delayMs,
                       bool repeat = false,
                       uint32_t interval = 0);
@@ -201,9 +213,10 @@ public:
     //    the last task finish time, not the current time.
     //    If conditionWait <= 0 => indefinite
     //    Conditions must not call back into Scheduler!
-    PID_t addConditionalTask(std::function<void()> action,
+    PID_t addConditionalTask(std::function<void()> onExecute,
                             std::function<bool()> condition,
-                            uint32_t conditionWaitMs = 0);
+                            uint32_t conditionWaitMs = 0,
+                            std::function<void(PID_t)> onTimeout = nullptr);
 
     // 3) "Conditional + Post Delay"
     //    Must become true within conditionWaitMs; 
@@ -212,10 +225,11 @@ public:
     //    then wait postConditionDelay
     //    If conditionWait <= 0 => indefinite
     //    Conditions must not call back into Scheduler!
-    PID_t addConditionalTimedTask(std::function<void()> action,
+    PID_t addConditionalTimedTask(std::function<void()> onExecute,
                                  std::function<bool()> condition,
                                  uint32_t postDelayMs,
-                                 uint32_t conditionWaitMs = 0);
+                                 uint32_t conditionWaitMs = 0,
+                                 std::function<void(PID_t)> onTimeout = nullptr);
 
     // ----------------------------------------------------
     // Public Task Manipulation Methods (restricted to a few)
